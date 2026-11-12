@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>保育士 動線記録</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="mode-record">
+
+<header id="top">
+  <div class="row1">
+    <input id="projName" class="projName" placeholder="調査名（例：○○保育園 5歳児室 11/12）" title="調査名">
+    <div class="grp">
+      <button id="btnImg" title="図面（JPG/PNG）を読み込みます">図面を読み込む</button>
+      <input type="file" id="fileImg" accept="image/*" hidden>
+      <label>縮尺 1/<select id="selScale"></select></label>
+      <select id="selOrient" title="A3の向き"><option value="landscape">A3 横</option><option value="portrait">A3 縦</option></select>
+      <span id="dInfo" class="info"></span>
+    </div>
+    <div class="grp mode">
+      <button id="modeRec" class="on">記録</button><button id="modeView">閲覧・編集</button>
+    </div>
+    <div class="grp right">
+      <button id="btnSave" title="調査データをJSONファイルとして保存">保存</button>
+      <button id="btnOpen" title="保存したJSONを開く">開く</button>
+      <input type="file" id="fileJson" accept=".json,application/json" hidden>
+      <button id="btnXlsx" class="accent" title="Excelに出力（変化時／1分毎）">Excel出力</button>
+      <button id="btnFig" class="accent" title="動線図を線データ(SVG/DXF)や画像で出力">動線図を出力</button>
+      <button id="btnNew" title="新しい調査を始める">新規</button>
+      <button id="btnHelp" title="使い方">？</button>
+    </div>
+  </div>
+  <div class="row2" id="clockWrap">
+    <div id="clockDisp" class="clockDisp">08:00:00</div>
+    <button id="btnStart" class="big primary">▶ 開始</button>
+    <button id="btnPause" class="big" disabled>⏸ 一時停止</button>
+    <div class="grp adj">
+      <button data-adj="-60">−1分</button><button data-adj="-10">−10秒</button><button data-adj="-1">−1秒</button>
+      <button data-adj="1">+1秒</button><button data-adj="10">+10秒</button><button data-adj="60">+1分</button>
+    </div>
+    <div class="grp">
+      <input id="clockSet" class="timeIn" value="08:00:00" title="時刻を直接入力（例 8:30:15）">
+      <button id="btnClockSet">時刻を合わせる</button>
+      <label title="動画を倍速で見ながら記録するとき">速度 <select id="selSpeed"><option value="0.5">×0.5</option><option value="1" selected>×1</option><option value="1.5">×1.5</option><option value="2">×2</option></select></label>
+    </div>
+    <div class="hintTop">スペースキーで 開始／一時停止</div>
+  </div>
+</header>
+
+<div id="main">
+  <div id="stage">
+    <div id="toolbar">
+      <button data-tool="select" class="on" title="図形の移動・画面のパン">選択・移動</button>
+      <span class="sep"></span>
+      <button data-tool="areaPoly" title="頂点をクリックして囲む。ダブルクリックで確定">エリア：多角形</button>
+      <button data-tool="areaRect" title="ドラッグで四角いエリア">エリア：四角</button>
+      <button data-tool="areaEdit" title="エリアの頂点をドラッグして調整">頂点編集</button>
+      <span class="sep"></span>
+      <button id="zIn">＋</button><button id="zOut">−</button><button id="zFit">全体</button>
+      <span class="sep"></span>
+      <button id="btnUndo" title="元に戻す (Ctrl+Z)">↶</button><button id="btnRedo" title="やり直し (Ctrl+Shift+Z)">↷</button>
+    </div>
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+      <rect id="paperRect" x="0" y="0" width="420" height="297" fill="#fff"/>
+      <image id="planImg" preserveAspectRatio="none"/>
+      <g id="gAreas"></g>
+      <g id="gDyn"></g>
+      <g id="gTool"></g>
+    </svg>
+    <div id="hint"></div>
+    <div id="selBox" hidden></div>
+    <div id="emptyMsg">図面（JPG／PNG）を「図面を読み込む」から取り込むか、ここにドラッグ＆ドロップしてください</div>
+  </div>
+
+  <aside id="side">
+    <nav id="tabs">
+      <button data-tab="ent" class="on">対象者</button><button data-tab="area">エリア</button><button data-tab="log">行為ログ</button><button data-tab="set">設定</button>
+    </nav>
+    <section id="tab-ent" class="tab on">
+      <div class="box">
+        <div class="seg" id="kindSeg">
+          <button data-kind="teacher" class="on"><span class="dot f"></span>先生（塗りつぶし）</button>
+          <button data-kind="other"><span class="dot h"></span>園児・その他（白抜き）</button>
+        </div>
+        <div class="line">
+          <label>番号 <input type="number" id="newNo" min="1" max="999" value="1" class="num"></label>
+          <button id="btnPlace" class="primary">この番号で配置する</button>
+        </div>
+        <p class="note">ボタンを押したあと、図面をクリック／タップするとその時刻（いま表示の時刻）の位置にプロットされます。続けて配置でき、番号は自動で進みます（Escで終了）。配置後はドラッグで移動＝移動時刻を記録します。</p>
+      </div>
+      <div class="listHead"><b>一覧</b>
+        <span><button id="btnOnlyT" class="mini">先生のみ表示</button><button id="btnAll" class="mini">全員表示</button></span></div>
+      <div id="entList"></div>
+    </section>
+    <section id="tab-area" class="tab">
+      <p class="note">「エリア：多角形／四角」で図面上の部屋やコーナーを囲むとエリアになります。名称はここで入力します。</p>
+      <label class="chk"><input type="checkbox" id="chkAreaLabel" checked> 図面にエリア名を表示</label>
+      <div id="areaList"></div>
+    </section>
+    <section id="tab-log" class="tab"><div id="logBox"></div></section>
+    <section id="tab-set" class="tab"><div id="setBox"></div></section>
+  </aside>
+</div>
+
+<footer id="dock">
+  <!-- 記録モード -->
+  <div id="dockRec">
+    <div class="dr1">
+      <label>対象 <select id="dEnt"></select></label>
+      <span id="dCur" class="dcur"></span>
+      <div id="dFields" class="dfields"></div>
+    </div>
+    <div class="dr2">
+      <input id="actInput" placeholder="行為を入力（例：ままごと遊び ／ 11番、トイレの介助）Enterで記録" autocomplete="off">
+      <button id="btnAct" class="primary">記録</button>
+      <button id="btnMic" title="Chrome / Edge で使えます">🎤 音声入力 OFF</button>
+      <span id="liveTr" class="liveTr"></span>
+    </div>
+    <div id="chips" class="chips"></div>
+  </div>
+  <!-- 閲覧モード -->
+  <div id="dockView">
+    <div class="rv1">
+      <b>表示する時間帯</b>
+      <label>開始 <input id="rsT" class="timeIn"></label>
+      <label>終了 <input id="reT" class="timeIn"></label>
+      <button id="rAll">全期間</button>
+      <button id="rPrev">◀ 範囲を前へ</button><button id="rNext">範囲を次へ ▶</button>
+      <span class="sep"></span>
+      <label class="chk"><input type="checkbox" id="oCircle" checked> 丸</label>
+      <label class="chk"><input type="checkbox" id="oTrail" checked> 軌跡</label>
+      <label class="chk"><input type="checkbox" id="oArrow" checked> 矢印</label>
+      <label class="chk"><input type="checkbox" id="oTime"> 時刻</label>
+    </div>
+    <div class="rv2">
+      <div class="slider">
+        <div class="rtrack"><div id="rFill"></div></div>
+        <input type="range" id="rs" step="1">
+        <input type="range" id="re" step="1">
+      </div>
+      <div id="rTicks" class="ticks"></div>
+    </div>
+  </div>
+</footer>
+
+<dialog id="dlgFig">
+  <form method="dialog" id="figForm">
+    <h3>動線図の出力</h3>
+    <div class="fgrid">
+      <div><b>形式</b>
+        <label><input type="radio" name="fmt" value="svg" checked> SVG（線データ・A3実寸mm）</label>
+        <label><input type="radio" name="fmt" value="dxf"> DXF（CAD用の線データ）</label>
+        <label><input type="radio" name="fmt" value="png"> PNG（画像）</label>
+      </div>
+      <div><b>時間帯</b>
+        <label><input type="radio" name="rng" value="view" checked> 閲覧モードで設定中の範囲</label>
+        <label><input type="radio" name="rng" value="all"> 調査時間の全体</label>
+      </div>
+      <div><b>含めるもの</b>
+        <label><input type="checkbox" id="fTrail" checked> 動線（軌跡）</label>
+        <label><input type="checkbox" id="fCircle"> 丸記号（番号つき）</label>
+        <label><input type="checkbox" id="fArrow" checked> 矢印（SVG/PNG）</label>
+        <label><input type="checkbox" id="fTime"> 時刻ラベル（SVG/PNG）</label>
+        <label><input type="checkbox" id="fArea"> エリア枠</label>
+        <label><input type="checkbox" id="fPlan"> 図面画像（SVG/PNG）</label>
+      </div>
+    </div>
+    <p class="note">既定は「図面なし・動線だけ」です。SVGはA3(420×297mm)のまま出力するので、Illustrator等で図面に重ねられます。軌跡は先生ごとにグループ／レイヤーを分けます。</p>
+    <menu><button value="cancel">閉じる</button><button id="figGo" class="primary" value="ok">出力する</button></menu>
+  </form>
+</dialog>
+
+<dialog id="dlgHelp">
+  <form method="dialog">
+    <h3>使い方</h3>
+    <ol class="help">
+      <li><b>図面を読み込む</b>：A3に収めた平面図の画像を取り込み、縮尺を選びます（丸の大きさが縮尺に応じて変わります）。</li>
+      <li><b>エリアを作る</b>：「エリア：多角形／四角」で部屋やコーナーを囲み、右の［エリア］タブで名前を付けます。</li>
+      <li><b>8:00に配置</b>：［対象者］タブで「先生／園児・その他」と番号を選び、図面をクリックして配置します。</li>
+      <li><b>記録する</b>：［▶開始］で時計が進みます（動画に合わせて［時刻を合わせる］や±ボタンで調整）。図形をドラッグするとその時刻の位置として記録されます。</li>
+      <li><b>行為を入れる</b>：下の入力欄に「11番、ままごと遊び」と打つか、🎤をONにして話します。発話した時刻で記録されます。園児の有無・動作の有無は下のプルダウンで切り替えます。</li>
+      <li><b>見返す</b>：［閲覧・編集］で下のスライダーの開始・終了を動かすと、その時間帯の軌跡が見えます。開始時刻の時点で最後にプロットされていた丸も表示されます。</li>
+      <li><b>出力</b>：［Excel出力］で「変化時」と「1分毎」の表、［動線図を出力］で線データ(SVG/DXF)が得られます。</li>
+    </ol>
+    <p class="note">データはこのブラウザに自動保存されますが、こまめに［保存］でJSONファイルにも残してください。音声入力はChrome／Edgeで使えます（音声認識はブラウザの提供元サーバーで処理されます）。</p>
+    <menu><button class="primary" value="ok">閉じる</button></menu>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+
+<script src="lib/xlsx.full.min.js"></script>
+<script src="js/core.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

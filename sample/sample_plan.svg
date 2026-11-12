@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="1188" viewBox="0 0 1680 1188">
+  <rect width="1680" height="1188" fill="#fff"/>
+  <g fill="none" stroke="#222" stroke-width="6">
+    <rect x="120" y="140" width="1440" height="900"/>
+    <line x1="120" y1="640" x2="1560" y2="640"/>
+    <line x1="820" y1="140" x2="820" y2="640"/>
+    <line x1="1240" y1="640" x2="1240" y2="1040"/>
+    <line x1="460" y1="640" x2="460" y2="1040"/>
+  </g>
+  <g font-family="sans-serif" font-size="34" fill="#888">
+    <text x="330" y="400">保育室（サンプル）</text>
+    <text x="1000" y="400">遊戯室</text>
+    <text x="150" y="850">玄関</text>
+    <text x="640" y="850">廊下</text>
+    <text x="1290" y="850">トイレ</text>
+    <text x="150" y="1100" font-size="26">サンプル平面図 A3 / 1:100 を想定</text>
+  </g>
+</svg>
