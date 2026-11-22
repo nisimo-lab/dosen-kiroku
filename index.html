@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>保育士 動線記録</title>
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=2">
 </head>
 <body class="mode-record">
 
@@ -78,8 +78,18 @@
       <button data-tab="ent" class="on">対象者</button><button data-tab="area">エリア</button><button data-tab="log">行為ログ</button><button data-tab="set">設定</button>
     </nav>
     <section id="tab-ent" class="tab on">
-      <div class="box">
-        <div class="seg" id="kindSeg">
+      <div class="box kidsBox">
+        <b>周辺の園児を置く（番号なし・軌跡なし）</b>
+        <p class="note">先生の位置を記録した時刻に、その周りにいる園児を区別せずに白抜きの丸で置いていきます。先に下の一覧か図面で先生（●）を選んでください。</p>
+        <div class="line" style="margin-top:4px">
+          <button id="btnKids" class="primary">園児を置く（いまの時刻）</button>
+          <button id="btnKidsCopy" title="直前の配置をコピーして、動いた園児だけドラッグで直します">前回の配置をコピーして置く</button>
+        </div>
+        <div id="kidsInfo" class="info" style="margin-top:6px"></div>
+      </div>
+      <div class="box" style="margin-top:8px">
+        <b>番号つきで個別に追跡する場合（先生・特定の園児）</b>
+        <div class="seg" id="kindSeg" style="margin-top:6px">
           <button data-kind="teacher" class="on"><span class="dot f"></span>先生（塗りつぶし）</button>
           <button data-kind="other"><span class="dot h"></span>園児・その他（白抜き）</button>
         </div>
@@ -191,7 +201,7 @@
 <div id="toast"></div>
 
 <script src="lib/xlsx.full.min.js"></script>
-<script src="js/core.js"></script>
-<script src="js/app.js"></script>
+<script src="js/core.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
 </body>
 </html>

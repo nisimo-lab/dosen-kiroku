@@ -13,6 +13,7 @@ const UI = {
   view: { ox: 0, oy: 0, k: 1 }, minK: 1,
   range: { s: P.start, e: P.end },
   place: false, kindNew: 'teacher', newNo: 1,
+  kidsMode: null, selKid: null,   // 番号なし園児の配置モード {tid,gid} / 選択中の園児 {gid,kid}
   selArea: null, draft: null, cursor: null,
   showCircles: true, showTrails: true, arrows: true, showTimes: false,
   logFilter: '', pendingT: null, mic: false
@@ -76,15 +77,16 @@ async function saveNow() {
 }
 
 /* ---------- 取り消し ---------- */
-const snap = () => JSON.stringify({ entities: P.entities, areas: P.areas });
+const snap = () => JSON.stringify({ entities: P.entities, areas: P.areas, kids: P.kids });
 function mutate(fn) {
   undoStack.push(snap()); if (undoStack.length > 60) undoStack.shift();
   redoStack.length = 0;
   fn(); afterChange();
 }
 function restore(s) {
-  const o = JSON.parse(s); P.entities = o.entities; P.areas = o.areas;
+  const o = JSON.parse(s); P.entities = o.entities; P.areas = o.areas; P.kids = o.kids || [];
   if (UI.sel.eid && !selEnt()) UI.sel = { eid: null, pid: null };
+  UI.selKid = null;
   afterChange();
 }
 function undo() { if (!undoStack.length) return toast('これ以上戻せません'); redoStack.push(snap()); restore(undoStack.pop()); }
@@ -185,7 +187,7 @@ function renderAreas() {
   gAreas.innerHTML = areasMarkup(P, { fill: true, labels: P.showAreaLabels, selArea: UI.selArea });
 }
 function renderDyn() {
-  const o = { interactive: true, sel: UI.sel, k: UI.view.k, hitPx: 12 };
+  const o = { interactive: true, sel: UI.sel, selKid: UI.selKid, k: UI.view.k, hitPx: 12 };
   if (UI.mode === 'record') {
     const T = clock.t;
     Object.assign(o, { S: T, E: T, trailS: T - P.trailSec, history: false, trails: P.trailSec > 0, circles: true, arrows: true, times: false });
@@ -225,15 +227,18 @@ const HINTS = {
 };
 function updateHint() {
   const h = $('#hint');
-  const txt = UI.place ? HINTS.place : HINTS[UI.tool] || '';
+  let txt = UI.place ? HINTS.place : HINTS[UI.tool] || '';
+  if (UI.kidsMode) { const te = entById(UI.kidsMode.tid); txt = `${te ? entLabel(te) : '先生'}の周辺の園児を置きます（番号なし）。図面をクリック → 続けて置けます　Escで終了`; }
   h.style.display = txt ? 'block' : 'none'; h.textContent = txt;
-  svg.style.cursor = (UI.place || UI.tool === 'areaPoly' || UI.tool === 'areaRect') ? 'crosshair' : 'default';
+  svg.style.cursor = (UI.place || UI.kidsMode || UI.tool === 'areaPoly' || UI.tool === 'areaRect') ? 'crosshair' : 'default';
   $('#btnPlace').textContent = UI.place ? '配置を終了する' : 'この番号で配置する';
   $('#btnPlace').classList.toggle('on', UI.place);
+  $('#btnKids').textContent = UI.kidsMode ? '園児の配置を終了する' : '園児を置く（いまの時刻）';
+  $('#btnKids').classList.toggle('on', !!UI.kidsMode);
 }
 function setTool(t) {
   UI.tool = t; UI.draft = null;
-  if (t !== 'select') UI.place = false;
+  if (t !== 'select') { UI.place = false; UI.kidsMode = null; }
   $$('#toolbar [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   renderTool(); updateHint();
 }
@@ -249,6 +254,7 @@ svg.addEventListener('pointerdown', ev => {
   const p = toMM(ev); UI.cursor = p;
   const tEnt = ev.target.closest && ev.target.closest('g.ent[data-pid]');
   const tVtx = ev.target.closest && ev.target.closest('[data-vi]');
+  const tKid = ev.target.closest && ev.target.closest('g.kid[data-kid]');
   svg.setPointerCapture(ev.pointerId);
   if (ev.button === 0 && UI.tool === 'areaEdit' && tVtx) {
     G = { type: 'vtx', aid: tVtx.dataset.aid, vi: +tVtx.dataset.vi, snap: snap(), moved: false };
@@ -257,6 +263,9 @@ svg.addEventListener('pointerdown', ev => {
   } else if (ev.button === 0 && tEnt && UI.tool === 'select') {
     const e = entById(tEnt.dataset.eid), pt = e && e.pts.find(x => x.id === tEnt.dataset.pid);
     if (e && pt) G = { type: 'drag', el: tEnt, eid: e.id, pid: pt.id, sp: p, p0: { x: pt.x, y: pt.y }, moved: false, cx: ev.clientX, cy: ev.clientY };
+  } else if (ev.button === 0 && tKid && UI.tool === 'select') {
+    const grp = P.kids.find(q => q.id === tKid.dataset.gid), kp = grp && grp.pts.find(q => q.id === tKid.dataset.kid);
+    if (kp) G = { type: 'kdrag', el: tKid, gid: grp.id, kid: kp.id, sp: p, p0: { x: kp.x, y: kp.y }, moved: false, cx: ev.clientX, cy: ev.clientY };
   }
   if (!G) G = { type: 'pan', cx: ev.clientX, cy: ev.clientY, ox: UI.view.ox, oy: UI.view.oy, moved: false, button: ev.button };
 });
@@ -269,7 +278,7 @@ svg.addEventListener('pointermove', ev => {
     if (!G.moved && Math.hypot(dx, dy) > 4) G.moved = true;
     if (G.moved) { UI.view.ox = G.ox - dx / UI.view.k; UI.view.oy = G.oy - dy / UI.view.k; UI._userView = true; applyView(); }
     if (UI.tool === 'areaPoly' && UI.draft) renderTool();
-  } else if (G.type === 'drag') {
+  } else if (G.type === 'drag' || G.type === 'kdrag') {
     if (!G.moved && Math.hypot(ev.clientX - G.cx, ev.clientY - G.cy) > 4) G.moved = true;
     if (G.moved) {
       const nx = clamp(G.p0.x + p.x - G.sp.x, 0, pw), ny = clamp(G.p0.y + p.y - G.sp.y, 0, ph);
@@ -292,6 +301,10 @@ svg.addEventListener('pointerup', ev => {
   } else if (g.type === 'drag') {
     if (g.moved && g.nx != null) commitDrag(g);
     else selectEnt(g.eid, g.pid);
+  } else if (g.type === 'kdrag') {
+    if (g.moved && g.nx != null) {
+      mutate(() => { const grp = P.kids.find(q => q.id === g.gid), kp = grp && grp.pts.find(q => q.id === g.kid); if (kp) { kp.x = f2(g.nx); kp.y = f2(g.ny); } UI.selKid = { gid: g.gid, kid: g.kid }; });
+    } else selectKid(g.gid, g.kid);
   } else if (g.type === 'rect') {
     const d = UI.draft; UI.draft = null;
     if (d && Math.abs(d.x1 - d.x0) > 2 && Math.abs(d.y1 - d.y0) > 2) {
@@ -316,8 +329,54 @@ function bgClick(p) {
     d.push([f2(clamp(p.x, 0, pw)), f2(clamp(p.y, 0, ph))]); renderTool();
     return;
   }
+  if (UI.kidsMode && UI.mode === 'record') return addKid(clamp(p.x, 0, pw), clamp(p.y, 0, ph));
   if (UI.place && UI.mode === 'record') return placeEntity(clamp(p.x, 0, pw), clamp(p.y, 0, ph));
-  if (UI.tool === 'select') { UI.sel = { eid: null, pid: null }; selectionChanged(); }
+  if (UI.tool === 'select') { UI.sel = { eid: null, pid: null }; UI.selKid = null; selectionChanged(); }
+}
+
+/* ---------- 番号なしの園児 ---------- */
+function startKids(copyPrev) {
+  if (UI.kidsMode) { UI.kidsMode = null; updateHint(); return; }
+  if (UI.mode !== 'record') return toast('園児の配置は「記録」モードで行います');
+  const e = selEnt();
+  if (!e || e.kind !== 'teacher') return toast('先に、先生（●）を選んでください');
+  UI.place = false; setTool('select');
+  UI.kidsMode = { tid: e.id, gid: null };
+  if (copyPrev) {
+    const gs = kidGroups(P, e.id), i = lastIdx(gs, clock.t);
+    if (i < 0) { UI.kidsMode = null; updateHint(); return toast('コピーできる前回の配置がありません'); }
+    const T = r1(clockT()), prev = gs[i];
+    mutate(() => {
+      let g = P.kids.find(q => q.tid === e.id && Math.abs(q.t - T) < 0.05);
+      if (!g) { g = { id: uid(), tid: e.id, t: T, pts: prev.pts.map(q => ({ id: uid(), x: q.x, y: q.y })) }; P.kids.push(g); P.kids.sort((a, b) => a.t - b.t); }
+      UI.kidsMode.gid = g.id;
+    });
+    toast('前回の配置をコピーしました。動いた園児はドラッグ、増えた園児はクリックで追加できます');
+  }
+  updateHint();
+}
+function addKid(x, y) {
+  const ks = UI.kidsMode, e = ks && entById(ks.tid);
+  if (!e) { UI.kidsMode = null; return updateHint(); }
+  mutate(() => {
+    let g = P.kids.find(q => q.id === ks.gid);
+    if (!g) {
+      const T = r1(clockT());
+      g = P.kids.find(q => q.tid === e.id && Math.abs(q.t - T) < 0.05);
+      if (!g) { g = { id: uid(), tid: e.id, t: T, pts: [] }; P.kids.push(g); P.kids.sort((a, b) => a.t - b.t); }
+      ks.gid = g.id;
+    }
+    g.pts.push({ id: uid(), x: f2(x), y: f2(y) });
+  });
+}
+function selectKid(gid, kid) { UI.selKid = { gid, kid }; selectionChanged(); }
+$('#btnKids').onclick = () => startKids(false);
+$('#btnKidsCopy').onclick = () => startKids(true);
+function syncKidsInfo() {
+  const e = selEnt(), el = $('#kidsInfo');
+  if (!e || e.kind !== 'teacher') { el.textContent = '先生を選ぶと、ここに園児配置の状況が出ます'; return; }
+  const gs = kidGroups(P, e.id), i = lastIdx(gs, clock.t);
+  el.innerHTML = `<b>${esc(entLabel(e))}</b>：園児配置 ${gs.length}回` + (i >= 0 ? `／直近 ${fmtShort(gs[i].t)} に ${gs[i].pts.length}人` : '');
 }
 function finishPoly() {
   const d = UI.draft; UI.draft = null;
@@ -373,13 +432,22 @@ function curPid(e) {
   return i >= 0 ? e.pts[i].id : null;
 }
 function selectEnt(eid, pid) {
-  UI.sel = { eid: eid || null, pid: null };
+  UI.sel = { eid: eid || null, pid: null }; UI.selKid = null;
   const e = selEnt(); if (e) UI.sel.pid = pid || curPid(e);
   selectionChanged();
 }
 function selectionChanged() { renderDyn(); updateSelBox(); syncDock(); $$('#entList .erow').forEach(r => r.classList.toggle('sel', r.dataset.eid === UI.sel.eid)); }
 function updateSelBox() {
   const box = $('#selBox'), e = selEnt();
+  if (UI.selKid) {
+    const grp = P.kids.find(q => q.id === UI.selKid.gid), te = grp && entById(grp.tid);
+    if (grp) {
+      box.hidden = false;
+      box.innerHTML = `<b>園児（番号なし）</b> ${te ? esc(entLabel(te)) + 'の周辺' : ''}　配置の時刻 <input id="sbKT" class="timeIn" value="${fmtHMS(grp.t)}"> <button id="sbKDel" class="del">この丸を削除</button> <button id="sbKGDel" class="del" title="この時刻の園児配置をすべて消します">この時刻の配置を全部削除</button> <button id="sbX" title="選択解除">×</button>`;
+      return;
+    }
+    UI.selKid = null;
+  }
   if (!e) { box.hidden = true; return; }
   const p = e.pts.find(x => x.id === UI.sel.pid);
   box.hidden = false;
@@ -388,6 +456,12 @@ function updateSelBox() {
     ` <button id="sbX" title="選択解除">×</button>`;
 }
 $('#selBox').addEventListener('change', ev => {
+  if (ev.target.id === 'sbKT') {
+    const grp = UI.selKid && P.kids.find(q => q.id === UI.selKid.gid), t = parseHMS(ev.target.value);
+    if (!grp || t == null) { updateSelBox(); return toast('時刻の形式が正しくありません（例 8:30:15）'); }
+    mutate(() => { grp.t = clamp(t, P.start, P.end); P.kids.sort((a, b) => a.t - b.t); });
+    return;
+  }
   if (ev.target.id !== 'sbT') return;
   const e = selEnt(), p = e && e.pts.find(x => x.id === UI.sel.pid), t = parseHMS(ev.target.value);
   if (!p || t == null) { updateSelBox(); return toast('時刻の形式が正しくありません（例 8:30:15）'); }
@@ -395,7 +469,17 @@ $('#selBox').addEventListener('change', ev => {
 });
 $('#selBox').addEventListener('click', ev => {
   const e = selEnt();
-  if (ev.target.id === 'sbX') { UI.sel = { eid: null, pid: null }; selectionChanged(); }
+  if (ev.target.id === 'sbKDel' && UI.selKid) {
+    const grp = P.kids.find(q => q.id === UI.selKid.gid);
+    mutate(() => { if (grp) { grp.pts = grp.pts.filter(q => q.id !== UI.selKid.kid); if (!grp.pts.length) P.kids = P.kids.filter(q => q !== grp); } UI.selKid = null; });
+    return;
+  }
+  if (ev.target.id === 'sbKGDel' && UI.selKid) {
+    const gid = UI.selKid.gid;
+    mutate(() => { P.kids = P.kids.filter(q => q.id !== gid); UI.selKid = null; });
+    return;
+  }
+  if (ev.target.id === 'sbX') { UI.sel = { eid: null, pid: null }; UI.selKid = null; selectionChanged(); }
   if (ev.target.id === 'sbDel' && e) {
     mutate(() => { e.pts = e.pts.filter(x => x.id !== UI.sel.pid); UI.sel.pid = curPid(e); });
     toast('位置の記録を1点削除しました（Ctrl+Zで戻せます）');
@@ -449,7 +533,7 @@ function renderEntList() {
         <label><input type="checkbox" class="et" ${e.trail ? 'checked' : ''}> 軌跡</label>
         <label><input type="checkbox" class="es" ${e.smooth ? 'checked' : ''}> 曲線にする</label>
         ${t ? `<label>色 <input type="color" class="ec" value="${e.color}"></label>` : ''}
-        <span class="cnt">${e.pts.length}点／行為${e.acts.length}</span>
+        <span class="cnt">${e.pts.length}点／行為${e.acts.length}${t ? `／園児配置${kidGroups(P, e.id).length}` : ''}</span>
       </div></div>`;
   }).join('') : '<p class="note">まだ誰も配置されていません。上のボタンから先生・園児を配置します。</p>';
 }
@@ -457,7 +541,7 @@ $('#entList').addEventListener('click', ev => {
   const row = ev.target.closest('.erow'); if (!row) return;
   const e = entById(row.dataset.eid); if (!e) return;
   if (ev.target.classList.contains('del')) {
-    if (confirm(`${entLabel(e)} を削除しますか？\n（位置・行為の記録もすべて消えます。Ctrl+Zで戻せます）`)) mutate(() => { P.entities = P.entities.filter(x => x !== e); if (UI.sel.eid === e.id) UI.sel = { eid: null, pid: null }; });
+    if (confirm(`${entLabel(e)} を削除しますか？\n（位置・行為の記録もすべて消えます。Ctrl+Zで戻せます）`)) mutate(() => { P.entities = P.entities.filter(x => x !== e); P.kids = P.kids.filter(g => g.tid !== e.id); if (UI.sel.eid === e.id) UI.sel = { eid: null, pid: null }; });
     return;
   }
   if (['INPUT', 'SELECT', 'LABEL'].includes(ev.target.tagName)) return;
@@ -629,7 +713,7 @@ function renderChips() {
   $('#chips').innerHTML = P.presets.map(p => `<button data-p="${esc(p)}">${esc(p)}</button>`).join('');
 }
 function syncDock() {
-  renderDockSelect();
+  renderDockSelect(); syncKidsInfo();
   const e = selEnt(), cur = $('#dCur');
   if (!e) { cur.textContent = '対象の丸をタップするか、右の一覧で選択してください'; $$('#dFields .df').forEach(x => x.disabled = true); return; }
   const T = clock.t, st = describeAt(P, e, T);
@@ -769,7 +853,7 @@ $('#rPrev').onclick = () => shiftRange(-1); $('#rNext').onclick = () => shiftRan
    モード・ヘッダ
    ===================================================================== */
 function setMode(m) {
-  UI.mode = m; UI.place = false;
+  UI.mode = m; UI.place = false; UI.kidsMode = null;
   document.body.classList.toggle('mode-record', m === 'record'); document.body.classList.toggle('mode-view', m === 'view');
   $('#modeRec').classList.toggle('on', m === 'record'); $('#modeView').classList.toggle('on', m === 'view');
   $('#btnPlace').disabled = m !== 'record';
@@ -837,7 +921,7 @@ $('#btnNew').onclick = async () => {
 function loadProject(obj) {
   pauseClock();
   P = normalizeProject(obj);
-  UI.sel = { eid: null, pid: null }; UI.selArea = null; UI.draft = null; UI.place = false; UI.tool = 'select';
+  UI.sel = { eid: null, pid: null }; UI.selKid = null; UI.kidsMode = null; UI.selArea = null; UI.draft = null; UI.place = false; UI.tool = 'select';
   UI.range = { s: P.start, e: P.end }; UI.logFilter = '';
   undoStack.length = 0; redoStack.length = 0;
   clock.t = P.start; lastShown = -1;
@@ -887,7 +971,7 @@ document.addEventListener('keydown', ev => {
   const tg = ev.target, typing = tg && (tg.tagName === 'INPUT' && !['checkbox', 'radio', 'range', 'button'].includes(tg.type) || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT');
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z' && !typing) { ev.preventDefault(); ev.shiftKey ? redo() : undo(); return; }
   if (ev.key === 'Escape') {
-    if (UI.draft) { UI.draft = null; renderTool(); } else if (UI.place) { UI.place = false; updateHint(); } else if (UI.tool !== 'select') setTool('select');
+    if (UI.draft) { UI.draft = null; renderTool(); } else if (UI.kidsMode) { UI.kidsMode = null; updateHint(); } else if (UI.place) { UI.place = false; updateHint(); } else if (UI.tool !== 'select') setTool('select');
     return;
   }
   if (ev.key === 'Enter' && UI.tool === 'areaPoly' && UI.draft && !typing) { finishPoly(); return; }

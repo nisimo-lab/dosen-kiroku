@@ -47,9 +47,12 @@ function newProject() {
     fields: defaultFields(),
     presets: defaultPresets(),
     entities: [],         // {id,no,kind,name,color,visible,trail,smooth,pts:[{id,t,x,y}],acts:[{id,t,text,f:{}}]}
-    areas: []             // {id,name,color,pts:[[x,y],...]}
+    areas: [],            // {id,name,color,pts:[[x,y],...]}
+    kids: []              // 番号なしの園児配置 {id,tid(先生のid),t,pts:[{id,x,y}]}。先生ごとに「その時刻の周辺の園児」を置く
   };
 }
+// 先生 tid の園児配置（時刻順）
+function kidGroups(P, tid) { return (P.kids || []).filter(g => g.tid === tid).sort((a, b) => a.t - b.t); }
 
 function normalizeProject(obj) {
   const base = newProject();
@@ -60,6 +63,8 @@ function normalizeProject(obj) {
   p.entities = (p.entities || []).map(e => Object.assign({ visible: true, trail: e.kind === 'teacher', smooth: false, name: '', color: '#222', pts: [], acts: [] }, e));
   p.entities.forEach(e => { e.pts.sort((a, b) => a.t - b.t); e.acts.sort((a, b) => a.t - b.t); });
   p.areas = p.areas || [];
+  p.kids = (Array.isArray(p.kids) ? p.kids : []).filter(g => g && Array.isArray(g.pts));
+  p.kids.sort((a, b) => a.t - b.t);
   return p;
 }
 
@@ -156,6 +161,9 @@ function nearbyCount(P, e, pos, T) {
     if (k < 0) continue;
     if (Math.hypot(o.pts[k].x - pos.x, o.pts[k].y - pos.y) <= R) n++;
   }
+  // 番号なしの園児配置（この先生の、T時点で最新の配置）
+  const gs = kidGroups(P, e.id), gi = lastIdx(gs, T);
+  if (gi >= 0) for (const q of gs[gi].pts) if (Math.hypot(q.x - pos.x, q.y - pos.y) <= R) n++;
   return n;
 }
 function describeAt(P, e, T) {
@@ -188,6 +196,7 @@ function candTimes(P, e) {
   const S = P.start, E = P.end, set = new Set();
   const add = t => { if (t > S && t < E) set.add(t); };
   e.pts.forEach(p => add(p.t)); e.acts.forEach(a => add(a.t));
+  kidGroups(P, e.id).forEach(g => add(g.t));
   if (P.fields.some(f => f.nearby)) P.entities.forEach(o => { if (o.kind !== 'teacher') o.pts.forEach(p => add(p.t)); });
   return [S, ...[...set].sort((a, b) => a - b)];
 }
@@ -303,7 +312,17 @@ function circleMarkup(P, e, p, cur, o, g) {
   return s + '</g>';
 }
 
-/* o: {S,E,trailS,history,trails,circles,arrows,times,interactive,sel,hitPx,k,export} */
+// 番号なしの園児（白抜きの丸のみ）
+function kidMarkup(grp, k, cur, o, g) {
+  const x = f2(k.x), y = f2(k.y);
+  const sel = o.interactive && o.selKid && o.selKid.kid === k.id;
+  let s = `<g class="kid ${cur ? 'cur' : 'hist'}"${o.interactive ? ` data-gid="${grp.id}" data-kid="${k.id}"` : ''}${cur ? '' : ' opacity="0.5"'}>`;
+  if (sel) s += `<circle cx="${x}" cy="${y}" r="${f2(g.r * 1.45 + g.sw)}" fill="none" stroke="#ff9800" stroke-width="${f2(Math.max(g.sw * 1.3, 0.25))}" stroke-dasharray="${f2(g.r * 0.5)} ${f2(g.r * 0.3)}"/>`;
+  if (g.hitR) s += `<circle cx="${x}" cy="${y}" r="${f2(g.hitR)}" fill="transparent"/>`;
+  return s + `<circle cx="${x}" cy="${y}" r="${f2(g.r)}" fill="#fff" stroke="#222" stroke-width="${f2(g.sw)}"/></g>`;
+}
+
+/* o: {S,E,trailS,history,trails,circles,arrows,times,interactive,sel,selKid,hitPx,k,export} */
 function dynMarkup(P, o) {
   const d = diamMM(P), r = d / 2;
   const g = { d, r, sw: Math.max(d * 0.08, 0.12), hitR: o.interactive ? Math.max(r, (o.hitPx || 12) / (o.k || 1)) : 0 };
@@ -337,6 +356,24 @@ function dynMarkup(P, o) {
         const cur = i === list.length - 1;
         (cur ? symC : symH).push(circleMarkup(P, e, p, cur, o, g));
       });
+    }
+    if (o.circles && teacher && P.kids && P.kids.length) {
+      const gs = kidGroups(P, e.id), use = [];
+      if (o.history) {
+        const i = lastIdx(gs, o.S);
+        if (i >= 0) use.push(gs[i]);
+        for (let k = i + 1; k < gs.length; k++) { if (gs[k].t > o.E) break; use.push(gs[k]); }
+      } else { const i = lastIdx(gs, o.E); if (i >= 0) use.push(gs[i]); }
+      const seen = new Set(); // 同じ位置に重なる丸（複製して置いたもの）は1つだけ描く
+      for (let gi = use.length - 1; gi >= 0; gi--) {
+        const grp = use[gi], cur = gi === use.length - 1;
+        for (const k of grp.pts) {
+          const key = k.x.toFixed(1) + ',' + k.y.toFixed(1);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          (cur ? symC : symH).push(kidMarkup(grp, k, cur, o, g));
+        }
+      }
     }
   }
   return `<g id="trails">${trailG.join('')}</g><g id="symbols">${symH.join('')}${symC.join('')}</g>`;
@@ -395,6 +432,19 @@ function buildDXF(P, o) {
           ents.push(pair(0, 'TEXT') + pair(8, base + '_MARK') + pair(10, f2(p.x)) + pair(20, Y(p.y)) + pair(30, 0) + pair(40, f2(d * 0.5)) + pair(1, e.no) + pair(72, 1) + pair(73, 2) + pair(11, f2(p.x)) + pair(21, Y(p.y)) + pair(31, 0));
         });
       }
+    }
+    if (o.circles && teacher) {
+      const gs = kidGroups(P, e.id), use = [];
+      const i = lastIdx(gs, o.S);
+      if (i >= 0) use.push(gs[i]);
+      for (let k = i + 1; k < gs.length; k++) { if (gs[k].t > o.E) break; use.push(gs[k]); }
+      const seen = new Set();
+      use.forEach(grp => grp.pts.forEach(q => {
+        const key = q.x.toFixed(1) + ',' + q.y.toFixed(1);
+        if (seen.has(key)) return; seen.add(key);
+        addLayer('KIDS_T' + e.no, 8);
+        ents.push(pair(0, 'CIRCLE') + pair(8, 'KIDS_T' + e.no) + pair(10, f2(q.x)) + pair(20, Y(q.y)) + pair(30, 0) + pair(40, f2(d / 2)));
+      }));
     }
   }
   let s = pair(0, 'SECTION') + pair(2, 'HEADER') + pair(9, '$ACADVER') + pair(1, 'AC1009') + pair(9, '$INSUNITS') + pair(70, 4) + pair(0, 'ENDSEC');
@@ -459,6 +509,16 @@ function buildWorkbook(P) {
   XLSX.utils.book_append_sheet(wb, wsP, safeSheet('位置記録(生)', used));
   const wsA = XLSX.utils.aoa_to_sheet(act); setW(wsA, [16, 12, 6, 10, 28, ...fl.map(() => 12)]);
   XLSX.utils.book_append_sheet(wb, wsA, safeSheet('行為記録(生)', used));
+
+  if ((P.kids || []).length) {
+    const kd = [['先生', '配置の時刻', 'x(mm,用紙上)', 'y(mm,用紙上)', '場所名']];
+    P.kids.slice().sort((a, b) => a.t - b.t).forEach(g => {
+      const te = P.entities.find(e => e.id === g.tid);
+      g.pts.forEach(q => kd.push([te ? teacherLabel(te) : '', fmtHMS(g.t), f2(q.x), f2(q.y), placeAt(P, q.x, q.y)]));
+    });
+    const wsK = XLSX.utils.aoa_to_sheet(kd); setW(wsK, [16, 12, 12, 12, 18]);
+    XLSX.utils.book_append_sheet(wb, wsK, safeSheet('園児配置(生)', used));
+  }
 
   const ar = [['エリア名', '頂点数', '面積(㎡・実寸換算)']];
   P.areas.forEach(a => ar.push([a.name, a.pts.length, Math.round(Math.abs(polyArea(a.pts)) * Math.pow(P.scale / 1000, 2) * 100) / 100]));
