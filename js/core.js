@@ -313,13 +313,17 @@ function circleMarkup(P, e, p, cur, o, g) {
 }
 
 // 番号なしの園児（白抜きの丸のみ）
-function kidMarkup(grp, k, cur, o, g) {
+// gray: 0=通常 / 1=過去の配置（灰色・操作できる） / 2=ひとつ前の配置の参考表示（灰色・操作できない）
+const KID_STALE_SEC = 9;   // 置いた時刻から、表示の秒でこれより多く経つと「過去」として灰色にする
+function kidMarkup(grp, k, cur, o, g, gray) {
+  gray = gray || 0;
   const x = f2(k.x), y = f2(k.y);
-  const sel = o.interactive && o.selKid && o.selKid.kid === k.id;
-  let s = `<g class="kid ${cur ? 'cur' : 'hist'}"${o.interactive ? ` data-gid="${grp.id}" data-kid="${k.id}"` : ''}${cur ? '' : ' opacity="0.5"'}>`;
+  const inter = o.interactive && gray !== 2;
+  const sel = inter && o.selKid && o.selKid.kid === k.id;
+  let s = `<g class="kid ${gray ? 'stale' : cur ? 'cur' : 'hist'}"${inter ? ` data-gid="${grp.id}" data-kid="${k.id}"` : ''}${gray === 2 ? ' pointer-events="none"' : ''}${cur && !gray ? '' : gray ? ' opacity="0.7"' : ' opacity="0.5"'}>`;
   if (sel) s += `<circle cx="${x}" cy="${y}" r="${f2(g.r * 1.45 + g.sw)}" fill="none" stroke="#ff9800" stroke-width="${f2(Math.max(g.sw * 1.3, 0.25))}" stroke-dasharray="${f2(g.r * 0.5)} ${f2(g.r * 0.3)}"/>`;
-  if (g.hitR) s += `<circle cx="${x}" cy="${y}" r="${f2(g.hitR)}" fill="transparent"/>`;
-  return s + `<circle cx="${x}" cy="${y}" r="${f2(g.r)}" fill="#fff" stroke="#222" stroke-width="${f2(g.sw)}"/></g>`;
+  if (g.hitR && inter) s += `<circle cx="${x}" cy="${y}" r="${f2(g.hitR)}" fill="transparent"/>`;
+  return s + `<circle cx="${x}" cy="${y}" r="${f2(g.r)}" fill="${gray ? '#e4e4e4' : '#fff'}" stroke="${gray ? '#888' : '#222'}" stroke-width="${f2(g.sw)}"/></g>`;
 }
 
 /* o: {S,E,trailS,history,trails,circles,arrows,times,interactive,sel,selKid,hitPx,k,export} */
@@ -363,15 +367,26 @@ function dynMarkup(P, o) {
         const i = lastIdx(gs, o.S);
         if (i >= 0) use.push(gs[i]);
         for (let k = i + 1; k < gs.length; k++) { if (gs[k].t > o.E) break; use.push(gs[k]); }
-      } else { const i = lastIdx(gs, o.E); if (i >= 0) use.push(gs[i]); }
+      }
+      // 記録モード：直近の配置が置いてから9秒を超えると「過去」＝灰色。直近の配置が新しい間は、ひとつ前の配置を灰色で参考表示する
+      let latestStale = false;
+      if (!o.history) {
+        const i = lastIdx(gs, o.E);
+        if (i >= 0) {
+          latestStale = Math.floor(o.E) - Math.floor(gs[i].t) > KID_STALE_SEC;
+          if (!latestStale && i > 0) use.push(gs[i - 1]);
+          use.push(gs[i]);
+        }
+      }
       const seen = new Set(); // 同じ位置に重なる丸（複製して置いたもの）は1つだけ描く
       for (let gi = use.length - 1; gi >= 0; gi--) {
         const grp = use[gi], cur = gi === use.length - 1;
+        const gray = o.history ? 0 : (cur ? (latestStale ? 1 : 0) : 2);
         for (const k of grp.pts) {
           const key = k.x.toFixed(1) + ',' + k.y.toFixed(1);
           if (seen.has(key)) continue;
           seen.add(key);
-          (cur ? symC : symH).push(kidMarkup(grp, k, cur, o, g));
+          (cur && !gray ? symC : symH).push(kidMarkup(grp, k, cur, o, g, gray));
         }
       }
     }
